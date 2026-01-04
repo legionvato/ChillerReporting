@@ -20,9 +20,18 @@ def _to_float(x: str) -> Optional[float]:
     return float(m.group(0)) if m else None
 
 def _grab(text: str, pattern: str, flags=re.IGNORECASE) -> Optional[str]:
+    """Return the first non-empty captured group from a regex match."""
     m = re.search(pattern, text, flags)
-    return m.group(1).strip() if m else None
+    if not m:
+        return None
 
+    # Some patterns use alternation, so group(1) might be None.
+    for i in range(1, (m.lastindex or 0) + 1):
+        g = m.group(i)
+        if g is not None and str(g).strip() != "":
+            return str(g).strip()
+
+    return None
 LABEL_PATTERNS = {
     # Unit overview
     "range": r"Range\s+(.+)",
