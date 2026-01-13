@@ -1,0 +1,99 @@
+{
+  "name": "Trane Chiller Maintenance Checklist (Real) v1",
+  "version": "1.0",
+  "sections": [
+    {
+      "title": "Maintenance Checklist",
+      "items": [
+        {
+          "id": "item_01",
+          "label": "Check unit for proper operation, excessive noise."
+        },
+        {
+          "id": "item_02",
+          "label": "Check for refrigerant leak, find out oiled spots."
+        },
+        {
+          "id": "item_03",
+          "label": "Run each compressor on the 75 steps for half an hour."
+        },
+        {
+          "id": "item_04",
+          "label": "Check oil level in oil separator sight glass."
+        },
+        {
+          "id": "item_05",
+          "label": "Check all the parameters from chiller’s LCD monitor for each compressor"
+        },
+        {
+          "id": "item_06",
+          "label": "Check liquid line sight glass."
+        },
+        {
+          "id": "item_07",
+          "label": "Check superheat on evaporator."
+        },
+        {
+          "id": "item_08",
+          "label": "Check suction superheat"
+        },
+        {
+          "id": "item_09",
+          "label": "Check liquid sub-cooling"
+        },
+        {
+          "id": "item_10",
+          "label": "Check water flow"
+        },
+        {
+          "id": "item_11",
+          "label": "Check fault history"
+        },
+        {
+          "id": "item_12",
+          "label": "Check programmable operating set points and safety cutouts. Assure they are correct for the application."
+        },
+        {
+          "id": "item_13",
+          "label": "Disconnect power source and lock out. Check electrical wiring and connections; tighten loose connections"
+        },
+        {
+          "id": "item_14",
+          "label": "Check water PH/ glycol strength"
+        },
+        {
+          "id": "item_15",
+          "label": "Check contactors, sensors, and mechanical safety limits"
+        },
+        {
+          "id": "item_16",
+          "label": "Check all sensors resistance and voltage according chart in manual"
+        },
+        {
+          "id": "item_17",
+          "label": "Check the fan overload settings are correct for the type of fan fitted"
+        },
+        {
+          "id": "item_18",
+          "label": "Check oil pressure delta P"
+        },
+        {
+          "id": "item_19",
+          "label": "Check oil condition on site"
+        },
+        {
+          "id": "item_20",
+          "label": "Check the system for superheat and sub cooling"
+        },
+        {
+          "id": "item_21",
+          "label": "Inspect dehydrator"
+        },
+        {
+          "id": "item_22",
+          "label": "Perform operational test and return to service"
+        }
+      ]
+    }
+  ]
+}
