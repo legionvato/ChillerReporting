@@ -9,6 +9,7 @@ from PIL import Image
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
+from reportlab.lib.utils import ImageReader
 
 from docx import Document
 from docx.shared import Inches
@@ -21,73 +22,81 @@ st.set_page_config(page_title="Trane Chiller Maintenance Report", layout="wide")
 CHECKLIST_PATH = os.path.join("docs", "checklists", "trane_chiller_v1.json")
 
 
-def default_checklist() -> dict:
-    return {
-        "name": "Trane Chiller Maintenance Checklist (Built-in fallback)",
-        "version": "1.0",
-        "sections": [
-            {"title": "Safety & Pre-check", "items": [
-                {"id": "safety_loto", "label": "LOTO/PPE confirmed"},
-                {"id": "safety_area", "label": "Work area safe / no hazards observed"},
-            ]},
-            {"title": "Visual Inspection", "items": [
-                {"id": "visual_leaks", "label": "No evidence of oil/refrigerant leaks"},
-                {"id": "visual_vibration", "label": "No abnormal noise/vibration"},
-            ]},
-            {"title": "Electrical", "items": [
-                {"id": "elec_panel", "label": "Main disconnect / panel condition OK"},
-                {"id": "elec_wiring", "label": "Wiring/terminals tight/clean (no discoloration)"},
-            ]},
-            {"title": "Final Status", "items": [
-                {"id": "final_operation", "label": "Unit returned to normal operation"},
-                {"id": "final_followup", "label": "Follow-up required (describe in notes)"},
-            ]},
-        ],
-    }
-
-
-def load_checklist(path: str) -> tuple[dict, str]:
-    if not os.path.exists(path):
-        return default_checklist(), f"Checklist file not found at: {path} — using built-in fallback."
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f), f"Loaded checklist from: {path}"
-    except Exception as e:
-        return default_checklist(), f"Failed to read checklist file ({e}) — using built-in fallback."
-
-
 def safe_text(x: str) -> str:
     return (x or "").strip()
 
 
+def load_checklist(path: str) -> tuple[dict, str]:
+    if not os.path.exists(path):
+        return {"name": "Checklist missing", "version": "0", "sections": []}, f"Checklist file not found: {path}"
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data, f"Loaded checklist from: {path}"
+    except Exception as e:
+        return {"name": "Checklist read error", "version": "0", "sections": []}, f"Failed to read checklist: {e}"
+
+
+def is_removed_item(item: dict) -> bool:
+    """
+    Remove LOTO/PPE item(s) automatically.
+    - by id: safety_loto
+    - by label contains: LOTO or PPE
+    """
+    item_id = (item.get("id") or "").lower()
+    label = (item.get("label") or "").lower()
+    if item_id == "safety_loto":
+        return True
+    if "loto" in label or "ppe" in label:
+        return True
+    return False
+
+
+def normalize_sections(checklist: dict) -> list[dict]:
+    """
+    Make checklist robust if JSON structure changes slightly.
+    Expected:
+      {"sections":[{"title":"...", "items":[{"id":"...", "label":"..."}]}]}
+    """
+    sections = checklist.get("sections") or []
+    out = []
+    for s in sections:
+        title = s.get("title") or s.get("name") or "Section"
+        items = s.get("items") or []
+        # filter removed items
+        items = [it for it in items if not is_removed_item(it)]
+        out.append({"title": title, "items": items})
+    return out
+
+
 def build_pdf_bytes(report: dict) -> bytes:
-    """
-    Simple, reliable PDF generator using reportlab.
-    Includes photos (scaled) appended at the end.
-    """
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     w, h = A4
 
-    left = 18 * mm
-    top = h - 18 * mm
+    left = 16 * mm
+    top = h - 16 * mm
     y = top
     line = 6 * mm
 
-    def write(text: str, bold=False):
+    def write(text: str, bold=False, size=10):
         nonlocal y
-        if y < 20 * mm:
+        if y < 18 * mm:
             c.showPage()
             y = top
-        c.setFont("Helvetica-Bold" if bold else "Helvetica", 11 if bold else 10)
+        c.setFont("Helvetica-Bold" if bold else "Helvetica", size)
         c.drawString(left, y, text)
         y -= line
 
     header = report["header"]
-    write("Trane Chiller Maintenance Report", bold=True)
+    sections = report["sections"]
+
+    # Title
+    write("Trane Chiller Maintenance Report", bold=True, size=14)
     y -= 2 * mm
 
-    write("Report Header", bold=True)
+    # Header block
+    write("Report Details", bold=True, size=12)
     write(f"Date: {header['date']}")
     write(f"Project: {header['project']}")
     write(f"Serial Number: {header['serial_number']}")
@@ -95,46 +104,46 @@ def build_pdf_bytes(report: dict) -> bytes:
     write(f"Technician: {header['technician']}")
     y -= 2 * mm
 
-    write("Checklist", bold=True)
-    for section in report["checklist"].get("sections", []):
-        write(section["title"], bold=True)
-        for item in section.get("items", []):
+    # Checklist
+    write("Checklist", bold=True, size=12)
+    for section in sections:
+        write(section["title"], bold=True, size=11)
+        for item in section["items"]:
             item_id = item["id"]
             label = item["label"]
             status = report["results"].get(item_id, {}).get("status", "")
             notes = report["results"].get(item_id, {}).get("notes", "")
-            write(f"- {label} — {status or '—'}")
+            write(f"- {label} — {status or '—'}", size=10)
             if safe_text(notes):
-                write(f"  Notes: {notes}")
+                write(f"  Notes: {notes}", size=10)
         y -= 1 * mm
 
-    write("Findings / Issues", bold=True)
-    for paragraph in (report["findings"].strip() or "None").splitlines():
-        write(paragraph)
-
+    # Findings / Reco
+    write("Findings / Issues", bold=True, size=12)
+    for ln in (report["findings"].strip() or "None").splitlines():
+        write(ln, size=10)
     y -= 1 * mm
-    write("Recommendations / Actions", bold=True)
-    for paragraph in (report["recommendations"].strip() or "None").splitlines():
-        write(paragraph)
 
-    # Photos
+    write("Recommendations / Actions", bold=True, size=12)
+    for ln in (report["recommendations"].strip() or "None").splitlines():
+        write(ln, size=10)
+
+    # Photos (NO filenames)
     photos = report.get("photos", [])
     if photos:
         c.showPage()
         y = top
-        write("Photos", bold=True)
+        write("Photos", bold=True, size=12)
         y -= 2 * mm
 
         max_w = w - 2 * left
-        max_h = 90 * mm  # each photo block height
+        max_h = 95 * mm
 
         for p in photos:
             if y < 30 * mm:
                 c.showPage()
                 y = top
 
-            write(f"{p['name']}", bold=True)
-            # Render image scaled to fit max_w x max_h
             img = Image.open(io.BytesIO(p["bytes"])).convert("RGB")
             iw, ih = img.size
             scale = min(max_w / iw, max_h / ih)
@@ -144,7 +153,7 @@ def build_pdf_bytes(report: dict) -> bytes:
             img.save(img_buf, format="JPEG", quality=85)
             img_buf.seek(0)
 
-            if y - th < 20 * mm:
+            if y - th < 18 * mm:
                 c.showPage()
                 y = top
 
@@ -164,17 +173,14 @@ def build_pdf_bytes(report: dict) -> bytes:
     return buf.getvalue()
 
 
-# reportlab helper
-from reportlab.lib.utils import ImageReader
-
-
 def build_docx_bytes(report: dict) -> bytes:
     doc = Document()
     header = report["header"]
+    sections = report["sections"]
 
     doc.add_heading("Trane Chiller Maintenance Report", level=1)
 
-    doc.add_heading("Report Header", level=2)
+    doc.add_heading("Report Details", level=2)
     doc.add_paragraph(f"Date: {header['date']}")
     doc.add_paragraph(f"Project: {header['project']}")
     doc.add_paragraph(f"Serial Number: {header['serial_number']}")
@@ -182,14 +188,14 @@ def build_docx_bytes(report: dict) -> bytes:
     doc.add_paragraph(f"Technician: {header['technician']}")
 
     doc.add_heading("Checklist", level=2)
-    for section in report["checklist"].get("sections", []):
+    for section in sections:
         doc.add_heading(section["title"], level=3)
-        for item in section.get("items", []):
+        for item in section["items"]:
             item_id = item["id"]
             label = item["label"]
             status = report["results"].get(item_id, {}).get("status", "")
             notes = report["results"].get(item_id, {}).get("notes", "")
-            p = doc.add_paragraph(f"{label} — {status or '—'}", style="List Bullet")
+            doc.add_paragraph(f"{label} — {status or '—'}", style="List Bullet")
             if safe_text(notes):
                 doc.add_paragraph(f"Notes: {notes}")
 
@@ -199,16 +205,15 @@ def build_docx_bytes(report: dict) -> bytes:
     doc.add_heading("Recommendations / Actions", level=2)
     doc.add_paragraph(report["recommendations"].strip() or "None")
 
+    # Photos (NO filenames)
     photos = report.get("photos", [])
     if photos:
         doc.add_heading("Photos", level=2)
         for p in photos:
-            doc.add_paragraph(p["name"])
             img = Image.open(io.BytesIO(p["bytes"])).convert("RGB")
             img_buf = io.BytesIO()
             img.save(img_buf, format="JPEG", quality=85)
             img_buf.seek(0)
-            # 6 inches wide max
             doc.add_picture(img_buf, width=Inches(6))
 
     out = io.BytesIO()
@@ -222,6 +227,8 @@ def build_xlsx_bytes(report: dict) -> bytes:
     ws.title = "Report"
 
     header = report["header"]
+    sections = report["sections"]
+
     ws.append(["Trane Chiller Maintenance Report"])
     ws.append([])
     ws.append(["Date", header["date"]])
@@ -234,8 +241,8 @@ def build_xlsx_bytes(report: dict) -> bytes:
     ws.append(["Checklist"])
     ws.append(["Section", "Item", "Status", "Notes"])
 
-    for section in report["checklist"].get("sections", []):
-        for item in section.get("items", []):
+    for section in sections:
+        for item in section["items"]:
             item_id = item["id"]
             label = item["label"]
             status = report["results"].get(item_id, {}).get("status", "")
@@ -246,23 +253,21 @@ def build_xlsx_bytes(report: dict) -> bytes:
     ws.append(["Findings / Issues", report["findings"].strip() or "None"])
     ws.append(["Recommendations / Actions", report["recommendations"].strip() or "None"])
 
-    photos = report.get("photos", [])
-    if photos:
-        ws.append([])
-        ws.append(["Photos (filenames only)"])
-        for p in photos:
-            ws.append([p["name"]])
+    # No photos in Excel (and no filenames) per your request
 
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue()
 
 
+# UI
 st.title("Trane Chiller Maintenance Report")
-checklist, checklist_msg = load_checklist(CHECKLIST_PATH)
+
+checklist_raw, checklist_msg = load_checklist(CHECKLIST_PATH)
+sections = normalize_sections(checklist_raw)
 st.caption(checklist_msg)
 
-tab1, tab2 = st.tabs(["1) Create report", "2) Preview & export"])
+tab1, tab2 = st.tabs(["Create report", "Preview & export"])
 
 if "results" not in st.session_state:
     st.session_state.results = {}
@@ -270,7 +275,7 @@ if "photos" not in st.session_state:
     st.session_state.photos = []
 
 with tab1:
-    st.subheader("Report header")
+    st.subheader("Report details")
     c1, c2 = st.columns(2)
     with c1:
         report_date = st.date_input("Date", value=date.today())
@@ -284,9 +289,9 @@ with tab1:
     st.subheader("Checklist")
     STATUS_OPTIONS = ["", "OK", "Not OK", "N/A"]
 
-    for section in checklist.get("sections", []):
+    for section in sections:
         with st.expander(section["title"], expanded=True):
-            for item in section.get("items", []):
+            for item in section["items"]:
                 item_id = item["id"]
                 label = item["label"]
 
@@ -316,25 +321,21 @@ with tab1:
 
     st.divider()
     st.subheader("Job photos")
-    st.caption("Upload photos from the job. They will be shown in the report and included in PDF/DOCX exports.")
     uploads = st.file_uploader(
         "Upload photos (jpg/png)",
         type=["jpg", "jpeg", "png"],
         accept_multiple_files=True,
     )
 
-    if uploads:
-        # Replace current photos with latest selection
-        photos = []
-        for f in uploads:
-            photos.append({"name": f.name, "bytes": f.getvalue()})
-        st.session_state.photos = photos
+    if uploads is not None:
+        st.session_state.photos = [{"bytes": f.getvalue()} for f in uploads]
 
     if st.session_state.photos:
         cols = st.columns(3)
         for i, p in enumerate(st.session_state.photos):
             with cols[i % 3]:
-                st.image(p["bytes"], caption=p["name"], use_container_width=True)
+                # No caption/filename
+                st.image(p["bytes"], use_container_width=True)
 
     st.divider()
     findings = st.text_area("Findings / Issues", height=120)
@@ -350,7 +351,7 @@ with tab1:
 
     st.session_state.current_report = {
         "header": header,
-        "checklist": checklist,
+        "sections": sections,
         "results": st.session_state.results,
         "findings": findings,
         "recommendations": recommendations,
@@ -360,20 +361,27 @@ with tab1:
 with tab2:
     report = st.session_state.get("current_report")
     if not report:
-        st.info("Fill in the report on the first tab, then come back here.")
+        st.info("Fill in the report first, then come back here.")
         st.stop()
 
-    missing = [k for k, v in report["header"].items() if k != "date" and not v]
-    if missing:
-        st.warning(f"Missing fields: {', '.join(missing)} (you can still export).")
+    # Clean preview header (no JSON)
+    st.subheader("Preview")
+    h = report["header"]
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown(f"**Date:** {h['date']}")
+        st.markdown(f"**Project:** {h['project']}")
+    with col2:
+        st.markdown(f"**Serial Number:** {h['serial_number']}")
+        st.markdown(f"**Model:** {h['model']}")
+    with col3:
+        st.markdown(f"**Technician:** {h['technician']}")
 
-    st.subheader("Preview (web)")
-    st.write("Header:", report["header"])
+    st.divider()
 
-    st.write("Checklist:")
-    for section in report["checklist"].get("sections", []):
+    for section in report["sections"]:
         st.markdown(f"### {section['title']}")
-        for item in section.get("items", []):
+        for item in section["items"]:
             item_id = item["id"]
             status = report["results"].get(item_id, {}).get("status", "")
             notes = report["results"].get(item_id, {}).get("notes", "")
@@ -392,16 +400,16 @@ with tab2:
         cols = st.columns(3)
         for i, p in enumerate(report["photos"]):
             with cols[i % 3]:
-                st.image(p["bytes"], caption=p["name"], use_container_width=True)
+                st.image(p["bytes"], use_container_width=True)
 
     st.divider()
-    st.subheader("Export")
+    st.subheader("Export (PDF / Word / Excel only)")
+
+    file_base = f"trane_chiller_report_{h['date']}"
 
     pdf_bytes = build_pdf_bytes(report)
     docx_bytes = build_docx_bytes(report)
     xlsx_bytes = build_xlsx_bytes(report)
-
-    file_base = f"trane_chiller_report_{report['header']['date']}"
 
     c1, c2, c3 = st.columns(3)
     with c1:
