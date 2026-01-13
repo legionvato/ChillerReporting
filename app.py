@@ -31,7 +31,7 @@ FOOTER_TEXT = "Treimax Georgia Maintenance / Service Reporting Tool"
 STATUS_OPTIONS = ["", "OK", "Not OK", "N/A"]
 DEFAULT_STATUS = ""
 
-# PDF photo layout (2-column grid)
+# PDF photo layout (2-column grid, clean)
 PDF_PHOTO_COLS = 2
 PDF_PHOTO_MAX_H = 60 * mm
 PDF_PHOTO_GAP = 4 * mm
@@ -158,10 +158,12 @@ def add_photos_dedup(item_id: str, uploaded_files) -> None:
         known.add(h)
 
 # ────────────────────────────────────────────────
-# PDF Export (Visual cleanup)
-# - Removed right-side OK/Not OK badges (misalignment issue)
-# - Removed light grey border lines around photos
-# - Removed footer top line (grey separator) for cleaner look
+# PDF Export (Clean visuals)
+# Requirements implemented:
+# 1) Remove "Report Details" heading (keep fields only)
+# 2) Ensure "Overall: ATTENTION" uses normal consistent Helvetica-Bold
+# 3) Remove any "Photos: <item>" labels
+# 4) Remove "Photo 1/2" captions and any grey border lines
 # ────────────────────────────────────────────────
 class PDFWriter:
     def __init__(self, c: canvas.Canvas, title: str):
@@ -195,7 +197,6 @@ class PDFWriter:
     def _draw_footer(self):
         c = self.c
         c.saveState()
-        # Removed the grey separator line for a cleaner + consistent footer
         c.setFillColor(colors.grey)
         c.setFont("Helvetica", 8)
         c.drawCentredString((self.x0 + self.x1) / 2, self.margin_b + 3.5 * mm, FOOTER_TEXT)
@@ -258,9 +259,8 @@ class PDFWriter:
 
     def _item_line(self, label: str, status: str):
         """
-        Single unified line renderer:
-        - status is appended as text in brackets, so alignment is always consistent.
-        - no right-side badges.
+        Status is appended as plain text in brackets.
+        This avoids alignment problems from right-side badges.
         """
         c = self.c
         c.setFont("Helvetica", 10)
@@ -287,63 +287,58 @@ class PDFWriter:
 
         for ln in lines:
             c.setFillColor(colors.black)
+            c.setFont("Helvetica", 10)
             c.drawString(self.x0, self.y, ln)
             self.y -= leading * 0.85
 
         self.y -= 1 * mm
 
-    def _photo_grid(self, photos: list[bytes], item_label: str):
+    def _photo_grid(self, photos: list[bytes]):
+        """
+        Clean grid:
+        - No "Photos:" label
+        - No "Photo 1/2" captions
+        - No borders/grey rectangles
+        """
         if not photos:
             return
 
         cols = PDF_PHOTO_COLS
         gap = PDF_PHOTO_GAP
         max_h = PDF_PHOTO_MAX_H
-
-        self._text_wrapped(f"Photos: {item_label}", size=9, bold=True, color=colors.grey, indent=8 * mm, leading=11)
-
         col_w = (self.max_w - (cols - 1) * gap) / cols
 
         scaled = []
-        for idx, b in enumerate(photos, start=1):
+        for b in photos:
             img = Image.open(io.BytesIO(b)).convert("RGB")
             iw, ih = img.size
             scale = min(col_w / iw, max_h / ih)
             tw, th = iw * scale, ih * scale
-            scaled.append((idx, b, tw, th))
+            scaled.append((b, tw, th))
 
         i = 0
         while i < len(scaled):
             row = scaled[i:i + cols]
-            row_h = max(th for (_, _, _, th) in row)
-            needed = row_h + 8 * mm
+            row_h = max(th for (_, _, th) in row)
+            needed = row_h + 2 * mm
 
             if self.y - needed < self.content_bottom:
                 self._new_page()
-                self._text_wrapped(f"(cont.) Photos: {item_label}", size=9, bold=True, color=colors.grey, indent=8 * mm, leading=11)
 
             top_y = self.y
             x = self.x0
 
-            for (idx, b, tw, th) in row:
+            for (b, tw, th) in row:
                 y = top_y - th
-
                 img = Image.open(io.BytesIO(b)).convert("RGB")
                 img_buf = io.BytesIO()
                 img.save(img_buf, format="JPEG", quality=85)
                 img_buf.seek(0)
 
-                # No border rectangle (removes misaligned grey lines)
                 self.c.drawImage(ImageReader(img_buf), x, y, width=tw, height=th, preserveAspectRatio=True, mask="auto")
-
-                # caption
-                self.c.setFillColor(colors.grey)
-                self.c.setFont("Helvetica", 8)
-                self.c.drawString(x, y - 3.2 * mm, f"Photo {idx}")
-
                 x += col_w + gap
 
-            self.y = top_y - row_h - 6.5 * mm
+            self.y = top_y - row_h - 4 * mm
             i += cols
 
     def finalize(self):
@@ -357,9 +352,8 @@ def build_pdf_bytes(report: dict) -> bytes:
     header = report["header"]
     summary = compute_summary(report)
 
-    pdf._text("Report Details", size=12, bold=True)
-    pdf._ensure_space(20 * mm)
-
+    # 1) NO "Report Details" heading — just print fields
+    pdf._ensure_space(18 * mm)
     rows = [
         ("Date", header.get("date", "")),
         ("Project", header.get("project", "")),
@@ -394,6 +388,8 @@ def build_pdf_bytes(report: dict) -> bytes:
     c.setFillColor(colors.black)
     c.setFont("Helvetica-Bold", 11)
     c.drawString(pdf.x0 + 3 * mm, box_y + box_h - 6 * mm, "Service Summary")
+
+    # 2) Ensure consistent font for "Overall: ATTENTION"
     c.setFont("Helvetica-Bold", 10)
     c.drawRightString(pdf.x1 - 3 * mm, box_y + box_h - 6 * mm, f"Overall: {summary['overall']}")
 
@@ -457,8 +453,9 @@ def build_pdf_bytes(report: dict) -> bytes:
                     leading=11,
                 )
 
+            # 3 & 4) Clean photos: no labels, no captions
             if photos:
-                pdf._photo_grid(photos, item_label=label)
+                pdf._photo_grid(photos)
 
         pdf.y -= 1 * mm
 
@@ -507,6 +504,7 @@ def build_docx_bytes(report: dict) -> bytes:
     title.runs[0].font.size = Pt(18)
     doc.add_paragraph()
 
+    # Keep DOCX "Report Details" section (PDF cleanup request only)
     h = doc.add_paragraph("Report Details")
     h.runs[0].bold = True
     h.runs[0].font.size = Pt(12)
