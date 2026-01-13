@@ -1,0 +1,22 @@
+{
+  "name": "Trane Chiller Maintenance Checklist (Generic) v1",
+  "version": "1.0",
+  "sections": [
+    {
+      "title": "Safety & Pre-check",
+      "items": [
+        { "id": "safety_loto", "label": "LOTO/PPE confirmed", "type": "status+notes" },
+        { "id": "safety_area", "label": "Work area safe / no hazards observed", "type": "status+notes" }
+      ]
+    },
+    {
+      "title": "Visual Inspection",
+      "items": [
+        { "id": "visual_leaks", "label": "No evidence of oil/refrigerant leaks", "type": "status+notes" },
+        { "id": "visual_vibration", "label": "No abnormal noise/vibration", "type": "status+notes" }
+      ]
+    },
+    {
+      "title": "Electrical",
+      "items": [
+        { "id": "elec_panel", "label": "Main disconne_
