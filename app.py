@@ -1,112 +1,237 @@
+import json
+import os
+from datetime import date
 
 import streamlit as st
-import pandas as pd
 
-import os, sys
-# Ensure local imports work on Streamlit Cloud
-sys.path.append(os.path.dirname(__file__))
+st.set_page_config(page_title="Trane Chiller Maintenance Report", layout="wide")
+
+CHECKLIST_PATH = os.path.join("docs", "checklists", "trane_chiller_v1.json")
 
 
-from src.extract import extract_specs_from_pdf
-from src.compare import build_comparison_table, opex_summary
-from src.report import build_pdf_report
+def default_checklist() -> dict:
+    return {
+        "name": "Trane Chiller Maintenance Checklist (Built-in fallback)",
+        "version": "1.0",
+        "sections": [
+            {
+                "title": "Safety & Pre-check",
+                "items": [
+                    {"id": "safety_loto", "label": "LOTO/PPE confirmed"},
+                    {"id": "safety_area", "label": "Work area safe / no hazards observed"},
+                ],
+            },
+            {
+                "title": "Visual Inspection",
+                "items": [
+                    {"id": "visual_leaks", "label": "No evidence of oil/refrigerant leaks"},
+                    {"id": "visual_vibration", "label": "No abnormal noise/vibration"},
+                    {"id": "visual_corrosion", "label": "No corrosion/damage observed"},
+                ],
+            },
+            {
+                "title": "Electrical",
+                "items": [
+                    {"id": "elec_panel", "label": "Main disconnect / panel condition OK"},
+                    {"id": "elec_wiring", "label": "Wiring/terminals tight/clean (no discoloration)"},
+                    {"id": "elec_amps", "label": "Compressor amps checked (record in notes)"},
+                ],
+            },
+            {
+                "title": "Refrigerant & Oil",
+                "items": [
+                    {"id": "ref_oil_level", "label": "Oil level/condition checked"},
+                    {"id": "ref_leaks", "label": "No refrigerant leak indications"},
+                ],
+            },
+            {
+                "title": "Water Side",
+                "items": [
+                    {"id": "water_temps", "label": "Entering/leaving water temperatures recorded"},
+                    {"id": "water_flow", "label": "Flow/DP indication normal"},
+                    {"id": "water_strainers", "label": "Strainers checked/cleaned (if applicable)"},
+                ],
+            },
+            {
+                "title": "Controls & Alarms",
+                "items": [
+                    {"id": "ctrl_display", "label": "Controller display/operation OK"},
+                    {"id": "ctrl_alarms", "label": "Alarm history reviewed"},
+                ],
+            },
+            {
+                "title": "Cleaning / Housekeeping",
+                "items": [
+                    {"id": "clean_general", "label": "Unit/panels reasonably clean and dry"},
+                ],
+            },
+            {
+                "title": "Final Status",
+                "items": [
+                    {"id": "final_operation", "label": "Unit returned to normal operation"},
+                    {"id": "final_followup", "label": "Follow-up required (describe in notes)"},
+                ],
+            },
+        ],
+    }
 
-st.set_page_config(page_title="Chiller Datasheet Compare", layout="wide")
 
-st.title("Chiller Datasheet Compare")
-st.caption("Upload 2 chiller datasheet PDFs (e.g., Trane Select Assist reports) → auto-extract specs → compare → optional OPEX + report export.")
+def load_checklist(path: str) -> tuple[dict, bool, str]:
+    """
+    Returns: (checklist_dict, loaded_from_file, message)
+    """
+    if not os.path.exists(path):
+        return default_checklist(), False, f"Checklist file not found at: {path} — using built-in fallback."
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f), True, f"Loaded checklist from: {path}"
+    except Exception as e:
+        return default_checklist(), False, f"Failed to read checklist file ({e}) — using built-in fallback."
 
-with st.sidebar:
-    st.header("Project Inputs (for OPEX/ROI)")
-    col1, col2 = st.columns(2)
-    with col1:
-        electricity_price = st.number_input("Electricity price (per kWh)", min_value=0.0, value=0.12, step=0.01, format="%.3f")
-        analysis_years = st.number_input("Analysis period (years)", min_value=1, value=10, step=1)
-    with col2:
-        eflh = st.number_input("Equivalent full-load hours (h/year)", min_value=0, value=2500, step=100)
-        currency = st.text_input("Currency", value="€", help="Used only for display in OPEX/ROI outputs.")
+
+def build_report_md(header: dict, checklist: dict, results: dict, findings: str, recommendations: str) -> str:
+    lines = []
+    lines.append("# Trane Chiller Maintenance Report\n")
+
+    lines.append("## Report Header")
+    lines.append(f"- **Date:** {header['date']}")
+    lines.append(f"- **Project:** {header['project']}")
+    lines.append(f"- **Serial Number:** {header['serial_number']}")
+    lines.append(f"- **Model:** {header['model']}")
+    lines.append(f"- **Technician:** {header['technician']}")
+    lines.append("")
+
+    lines.append("## Checklist")
+    for section in checklist.get("sections", []):
+        lines.append(f"### {section['title']}")
+        for item in section.get("items", []):
+            item_id = item["id"]
+            label = item["label"]
+            status = results.get(item_id, {}).get("status", "")
+            notes = results.get(item_id, {}).get("notes", "")
+            lines.append(f"- **{label}** — {status if status else '—'}")
+            if notes.strip():
+                lines.append(f"  - Notes: {notes.strip()}")
+        lines.append("")
+
+    lines.append("## Findings / Issues")
+    lines.append(findings.strip() if findings.strip() else "_None_")
+    lines.append("")
+
+    lines.append("## Recommendations / Actions")
+    lines.append(recommendations.strip() if recommendations.strip() else "_None_")
+    lines.append("")
+
+    lines.append("---")
+    lines.append("**Signature (Technician):** ___________________________")
+    return "\n".join(lines)
+
+
+st.title("Trane Chiller Maintenance Report")
+checklist, loaded_from_file, checklist_msg = load_checklist(CHECKLIST_PATH)
+st.caption(checklist_msg)
+
+tab1, tab2 = st.tabs(["1) Create report", "2) Preview & export"])
+
+# Session state for checklist values
+if "results" not in st.session_state:
+    st.session_state.results = {}
+
+with tab1:
+    st.subheader("Report header")
+    c1, c2 = st.columns(2)
+    with c1:
+        report_date = st.date_input("Date", value=date.today())
+        project = st.text_input("Project")
+        serial_number = st.text_input("Serial Number")
+    with c2:
+        model = st.text_input("Model")
+        technician = st.text_input("Technician")
 
     st.divider()
-    st.header("Optional commercial inputs")
-    st.caption("These do not exist in most datasheets; enter if you want payback/ROI.")
-    capex_a = st.number_input("CAPEX Option A", min_value=0.0, value=0.0, step=1000.0)
-    capex_b = st.number_input("CAPEX Option B", min_value=0.0, value=0.0, step=1000.0)
+    st.subheader("Checklist")
 
-st.subheader("1) Upload datasheets (2 PDFs)")
-files = st.file_uploader("Upload exactly 2 PDF datasheets", type=["pdf"], accept_multiple_files=True)
+    STATUS_OPTIONS = ["", "OK", "Not OK", "N/A"]
 
-if not files:
-    st.info("Upload two PDFs to begin.")
-    st.stop()
+    for section in checklist.get("sections", []):
+        with st.expander(section["title"], expanded=True):
+            for item in section.get("items", []):
+                item_id = item["id"]
+                label = item["label"]
 
-if len(files) != 2:
-    st.warning(f"Please upload exactly 2 PDFs (you uploaded {len(files)}).")
-    st.stop()
+                if item_id not in st.session_state.results:
+                    st.session_state.results[item_id] = {"status": "", "notes": ""}
 
-# Extract
-with st.spinner("Extracting specs from PDFs..."):
-    specs = []
-    for f in files:
-        data = extract_specs_from_pdf(f)
-        data["_file_name"] = f.name
-        specs.append(data)
+                colA, colB = st.columns([2, 3])
+                with colA:
+                    status = st.selectbox(
+                        label,
+                        options=STATUS_OPTIONS,
+                        index=STATUS_OPTIONS.index(st.session_state.results[item_id]["status"])
+                        if st.session_state.results[item_id]["status"] in STATUS_OPTIONS
+                        else 0,
+                        key=f"status_{item_id}",
+                    )
+                with colB:
+                    notes = st.text_input(
+                        "Notes",
+                        value=st.session_state.results[item_id]["notes"],
+                        key=f"notes_{item_id}",
+                        placeholder="Optional notes",
+                    )
 
-a, b = specs[0], specs[1]
+                st.session_state.results[item_id]["status"] = status
+                st.session_state.results[item_id]["notes"] = notes
 
-st.subheader("2) Extracted specs (editable)")
-st.caption("If a value is missing or looks wrong, edit it here before comparing.")
+    st.divider()
+    findings = st.text_area("Findings / Issues", height=120)
+    recommendations = st.text_area("Recommendations / Actions", height=120)
 
-def editable_specs(spec: dict, key_order: list[str]) -> dict:
-    out = dict(spec)
-    for k in key_order:
-        if k in out:
-            v = out[k]
-            if isinstance(v, (int, float)) and v is not None:
-                out[k] = st.text_input(k, value=str(v))
-            else:
-                out[k] = st.text_input(k, value="" if v is None else str(v))
-    # Also show any other keys
-    other = [k for k in out.keys() if k not in key_order and not k.startswith("_")]
-    if other:
-        with st.expander("Other extracted fields"):
-            for k in sorted(other):
-                v = out[k]
-                out[k] = st.text_input(k, value="" if v is None else str(v), key=f"other_{k}_{id(out)}")
-    return out
+    header = {
+        "date": str(report_date),
+        "project": project.strip(),
+        "serial_number": serial_number.strip(),
+        "model": model.strip(),
+        "technician": technician.strip(),
+    }
 
-KEY_ORDER = [
-    "model", "range", "chiller_model", "unit_application",
-    "compressor_type", "refrigerant", "refrigerant_gwp",
-    "electrical_supply",
-    "design_ambient_c", "lwt_c", "ewt_c", "fluid", "antifreeze_pct", "elevation_m",
-    "net_capacity_kw", "gross_capacity_kw",
-    "net_eer_kw_per_kw", "gross_eer_kw_per_kw",
-    "power_kw",
-    "design_flow_ls", "evap_pressure_drop_kpa",
-    "sound_power_dba", "sound_pressure_dba",
-    "length_mm", "width_mm", "height_mm", "operating_weight_kg", "shipping_weight_kg",
-    "iplv_si", "nplv_si",
-    "startup_current_a", "running_current_a", "max_amps_a", "max_power_kw", "cos_phi"
-]
+    st.session_state.current_report = {
+        "header": header,
+        "checklist": checklist,
+        "results": st.session_state.results,
+        "findings": findings,
+        "recommendations": recommendations,
+    }
 
-colA, colB = st.columns(2)
-with colA:
-    st.markdown(f"**Option A:** {a.get('_file_name','')}")
-    a_edit = editable_specs(a, KEY_ORDER)
-with colB:
-    st.markdown(f"**Option B:** {b.get('_file_name','')}")
-    b_edit = editable_specs(b, KEY_ORDER)
+with tab2:
+    report = st.session_state.get("current_report")
+    if not report:
+        st.info("Fill in the report on the first tab, then come back here.")
+        st.stop()
 
-st.subheader("3) Comparison")
-comp = build_comparison_table(a_edit, b_edit, label_a="Option A", label_b="Option B")
-st.dataframe(comp, use_container_width=True)
+    missing = [k for k, v in report["header"].items() if k != "date" and not v]
+    if missing:
+        st.warning(f"Missing fields: {', '.join(missing)} (you can still export).")
 
-st.subheader("4) OPEX & simple payback (optional)")
-op = opex_summary(a_edit, b_edit, electricity_price=electricity_price, eflh=eflh, years=int(analysis_years), currency=currency, capex_a=capex_a, capex_b=capex_b)
-st.dataframe(op, use_container_width=True)
+    md = build_report_md(
+        report["header"],
+        report["checklist"],
+        report["results"],
+        report["findings"],
+        report["recommendations"],
+    )
 
-st.subheader("5) Export report")
-st.caption("Generates a simple PDF report with the extracted specs, comparison, and OPEX summary.")
-if st.button("Generate PDF report"):
-    pdf_bytes = build_pdf_report(a_edit, b_edit, comp, op, title="Chiller Datasheet Comparison Report")
-    st.download_button("Download report PDF", data=pdf_bytes, file_name="chiller_comparison_report.pdf", mime="application/pdf")
+    st.subheader("Preview")
+    st.markdown(md)
+
+    st.divider()
+    st.subheader("Export")
+    st.caption("Download Markdown, or use browser Print → Save as PDF from the preview.")
+
+    st.download_button(
+        label="Download report (.md)",
+        data=md.encode("utf-8"),
+        file_name=f"trane_chiller_report_{report['header']['date']}.md",
+        mime="text/markdown",
+    )
+
