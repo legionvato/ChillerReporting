@@ -197,7 +197,7 @@ class PDFWriter:
         self.c.rect(self.x0, y, self.max_w, bar_h, stroke=0, fill=1)
         self.c.setFillColor(colors.black)
         self.c.setFont("Helvetica-Bold", 11)
-        self.c.drawString(self.x0 + 3 * mm, y + 2.5 * mm, title)
+        c.drawString(self.x0 + 3 * mm, y + 2.5 * mm, title)
         self.y = y - 3 * mm
 
     def _badge(self, status: str, x_right: float, y_baseline: float):
@@ -234,23 +234,24 @@ class PDFWriter:
         c.setFont("Helvetica", 10)
         max_w = self.max_w - right_reserve
         words = (label or "").split()
-        lines = []
         line = []
+        lines = []
         while words:
             line.append(words.pop(0))
-            if words:
-                w = c.stringWidth(" ".join(line + [words[0]]), "Helvetica", 10)
-                if w > max_w:
-                    lines.append(" ".join(line))
-                    line = [words.pop(0)] if words else []
+            w = c.stringWidth(" ".join(line), "Helvetica", 10)
+            if w > max_w:
+                last = line.pop()
+                lines.append(" ".join(line))
+                line = [last]
         if line:
             lines.append(" ".join(line))
         leading = 12
         total_h = leading * len(lines) + 3 * mm
         self._ensure_space(total_h)
         for i, ln in enumerate(lines):
+            c.setFont("Helvetica", 10)
             c.setFillColor(colors.black)
-            c.drawString(self.x0, self.y, f"- {ln}" if i == 0 else f"  {ln}")
+            c.drawString(self.x0, self.y, f"- {ln}" if i == 0 else f" {ln}")
             if i == 0:
                 self._badge(status, self.x1, self.y)
             self.y -= leading * 0.85
@@ -271,13 +272,13 @@ class PDFWriter:
             if self.y - needed < self.content_bottom:
                 self._new_page()
                 if keep_item_label:
-                    self._text_wrapped(f"(cont.) {keep_item_label}", size=9, bold=True, color=colors.grey, leading=11)
+                    self._text_wrapped(f"Photos for {keep_item_label} (continued):", size=9, bold=True, color=colors.grey, leading=11)
             x = self.x0
             y = self.y - th
             self.c.saveState()
             self.c.setStrokeColor(colors.lightgrey)
             self.c.setLineWidth(0.8)
-            self.c.rect(x, y, tw, th, stroke=1, fill=0)
+            c.rect(x, y, tw, th, stroke=1, fill=0)
             img_buf = io.BytesIO()
             img.save(img_buf, format="JPEG", quality=85)
             img_buf.seek(0)
@@ -295,7 +296,6 @@ def build_pdf_bytes(report: dict) -> bytes:
     pdf = PDFWriter(c, title="Trane Chiller Maintenance Report")
     header = report["header"]
     summary = compute_summary(report)
-
     pdf._text("Report Details", size=12, bold=True)
     pdf._ensure_space(20 * mm)
     rows = [
@@ -318,8 +318,6 @@ def build_pdf_bytes(report: dict) -> bytes:
         c.drawString(pdf.x0 + label_w, pdf.y, safe_text(v) or "—")
         pdf.y -= row_h * 0.8
     pdf.y -= 4 * mm
-
-    # Service Summary box
     box_h = 22 * mm
     pdf._ensure_space(box_h + 6 * mm)
     box_y = pdf.y - box_h
@@ -361,7 +359,6 @@ def build_pdf_bytes(report: dict) -> bytes:
         c.drawString(pdf.x0 + 22 * mm, yy + (i * 4.2 * mm), ln)
     c.restoreState()
     pdf.y = box_y - 7 * mm
-
     pdf._text("Checklist", size=12, bold=True)
     pdf.y -= 2 * mm
     for sec in report["sections"]:
@@ -378,7 +375,6 @@ def build_pdf_bytes(report: dict) -> bytes:
             if photos:
                 pdf._photo_block(photos, keep_item_label=label)
         pdf.y -= 1 * mm
-
     def write_bullets(title: str, text: str):
         pdf._section_bar(title)
         lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
@@ -387,7 +383,6 @@ def build_pdf_bytes(report: dict) -> bytes:
             return
         for ln in lines:
             pdf._text_wrapped(f"• {ln}", size=10, leading=12)
-
     write_bullets("Findings / Issues", report.get("findings", ""))
     write_bullets("Recommendations / Actions", report.get("recommendations", ""))
     pdf.finalize()
@@ -412,19 +407,15 @@ def build_docx_bytes(report: dict) -> bytes:
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     for run in p.runs:
         run.font.size = Pt(8)
-
     header = report["header"]
     summary = compute_summary(report)
-
     title = doc.add_paragraph("Trane Chiller Maintenance Report")
     title.runs[0].bold = True
     title.runs[0].font.size = Pt(18)
     doc.add_paragraph()
-
     h = doc.add_paragraph("Report Details")
     h.runs[0].bold = True
     h.runs[0].font.size = Pt(12)
-
     details = [
         ("Date", header.get("date", "") or "—"),
         ("Project", header.get("project", "") or "—"),
@@ -439,12 +430,10 @@ def build_docx_bytes(report: dict) -> bytes:
         t.cell(i, 1).text = f"{v}"
         t.cell(i, 0).paragraphs[0].runs[0].bold = True
         _set_cell_shading(t.cell(i, 0), "F2F2F2")
-
     doc.add_paragraph()
     sh = doc.add_paragraph("Service Summary")
     sh.runs[0].bold = True
     sh.runs[0].font.size = Pt(12)
-
     counts = summary["counts"]
     not_ok_list = summary["not_ok_items"] or ["None"]
     stbl = doc.add_table(rows=3, cols=2)
@@ -458,12 +447,10 @@ def build_docx_bytes(report: dict) -> bytes:
     for r in range(3):
         stbl.cell(r, 0).paragraphs[0].runs[0].bold = True
         _set_cell_shading(stbl.cell(r, 0), "F7F7F7")
-
     doc.add_paragraph()
     ch = doc.add_paragraph("Checklist")
     ch.runs[0].bold = True
     ch.runs[0].font.size = Pt(12)
-
     for sec in report["sections"]:
         secp = doc.add_paragraph(sec["title"])
         secp.runs[0].bold = True
@@ -493,7 +480,6 @@ def build_docx_bytes(report: dict) -> bytes:
                     pic_par.paragraph_format.left_indent = Inches(0.25)
                     pic_par.add_run().add_picture(img_buf, width=Inches(6))
         doc.add_paragraph()
-
     def add_bullets(title: str, text: str):
         hh = doc.add_paragraph(title)
         hh.runs[0].bold = True
@@ -504,10 +490,8 @@ def build_docx_bytes(report: dict) -> bytes:
             return
         for ln in lines:
             doc.add_paragraph(f"• {ln}")
-
     add_bullets("Findings / Issues", report.get("findings", ""))
     add_bullets("Recommendations / Actions", report.get("recommendations", ""))
-
     out = io.BytesIO()
     doc.save(out)
     return out.getvalue()
@@ -552,23 +536,18 @@ def build_xlsx_bytes(report: dict) -> bytes:
     wb.save(out)
     return out.getvalue()
 
-# ────────────────────────────────────────────────
 # Streamlit UI
-# ────────────────────────────────────────────────
 st.title("Trane Chiller Maintenance Report")
 checklist_raw, checklist_msg = load_checklist(CHECKLIST_PATH)
 sections = normalize_sections(checklist_raw)
 st.caption(checklist_msg)
-
 tab1, tab2 = st.tabs(["Create report", "Preview & export"])
-
 if "results" not in st.session_state:
     st.session_state.results = {}
 if "photos_by_item" not in st.session_state:
     st.session_state.photos_by_item = {}
 if "current_report" not in st.session_state:
     st.session_state.current_report = None
-
 with tab1:
     st.subheader("Report details")
     c1, c2 = st.columns(2)
@@ -579,22 +558,17 @@ with tab1:
     with c2:
         model = st.text_input("Model")
         technician = st.text_input("Technician")
-
     st.divider()
     st.subheader("Checklist")
-
     for sec in sections:
         with st.expander(sec["title"], expanded=True):
             for item in sec["items"]:
                 item_id = item["id"]
                 label = item["label"]
-
-                # Initialize
                 if item_id not in st.session_state.results:
                     st.session_state.results[item_id] = {"status": "", "notes": ""}
                 if item_id not in st.session_state.photos_by_item:
                     st.session_state.photos_by_item[item_id] = []
-
                 colA, colB = st.columns([2, 3])
                 with colA:
                     status = st.selectbox(
@@ -614,62 +588,43 @@ with tab1:
                     )
                     if status == "Not OK" and not safe_text(notes):
                         st.warning("Notes are required when status is Not OK.", icon="⚠️")
-
                 st.session_state.results[item_id]["status"] = status
                 st.session_state.results[item_id]["notes"] = notes
-
-                # ─── Photos ───────────────────────────────────────────────────────
                 with st.expander("Photos for this item", expanded=False):
                     uploader_key = f"uploader_{item_id}"
                     state_key = f"uploader_state_{item_id}"
-
                     uploaded_files = st.file_uploader(
                         "Upload photos (jpg/png)",
                         type=["jpg", "jpeg", "png"],
                         accept_multiple_files=True,
                         key=uploader_key,
                     )
-
-                    # Only process newly added files
                     if uploaded_files is not None:
                         if state_key not in st.session_state:
                             st.session_state[state_key] = []
-
                         prev_len = len(st.session_state[state_key])
                         current_len = len(uploaded_files)
-
                         if current_len > prev_len:
-                            # New files were added
                             new_files = uploaded_files[prev_len:]
                             for file in new_files:
                                 st.session_state.photos_by_item[item_id].append(file.getvalue())
-
-                        # Update remembered state
-                        st.session_state[state_key] = list(uploaded_files)  # copy reference
-
-                    # Display current photos
+                        st.session_state[state_key] = list(uploaded_files)
                     current_photos = st.session_state.photos_by_item[item_id]
                     if current_photos:
                         cols = st.columns(3)
                         for idx, img_bytes in enumerate(current_photos):
                             with cols[idx % 3]:
                                 st.image(img_bytes, use_container_width=True)
-
-                    # Clear button
                     if current_photos and st.button("Clear all photos for this item", key=f"clear_{item_id}"):
                         st.session_state.photos_by_item[item_id] = []
                         if state_key in st.session_state:
                             del st.session_state[state_key]
                         st.rerun()
-
                 st.divider()
-
     st.subheader("Findings / Issues")
     findings = st.text_area("Write each point on a new line", height=120, key="findings")
-
     st.subheader("Recommendations / Actions")
     recommendations = st.text_area("Write each point on a new line", height=120, key="recommendations")
-
     header = {
         "date": str(report_date),
         "project": safe_text(project),
@@ -677,7 +632,6 @@ with tab1:
         "model": safe_text(model),
         "technician": safe_text(technician),
     }
-
     st.session_state.current_report = {
         "header": header,
         "sections": sections,
@@ -686,19 +640,16 @@ with tab1:
         "recommendations": recommendations,
         "photos_by_item": st.session_state.photos_by_item,
     }
-
 with tab2:
     report = st.session_state.get("current_report")
     if not report:
         st.info("Fill in the report first, then come back here.")
         st.stop()
-
     errors = validate_report(report)
     if errors:
         st.error("Fix the issues below before exporting:", icon="🛑")
         for e in errors:
             st.write(f"- {e}")
-
     st.subheader("Preview")
     h = report["header"]
     summary = compute_summary(report)
@@ -714,7 +665,6 @@ with tab2:
         st.markdown(f"**Overall:** {summary['overall']}")
     st.caption(f"Counts — OK: {summary['counts']['OK']}, Not OK: {summary['counts']['Not OK']}, N/A: {summary['counts']['N/A']}")
     st.divider()
-
     for sec in report["sections"]:
         st.markdown(f"### {sec['title']}")
         for item in sec["items"]:
@@ -730,7 +680,6 @@ with tab2:
                 for i, b in enumerate(photos):
                     with cols[i % 3]:
                         st.image(b, use_container_width=True)
-
     st.markdown("### Findings / Issues")
     lines = [ln.strip() for ln in (report.get("findings") or "").splitlines() if ln.strip()]
     if not lines:
@@ -738,7 +687,6 @@ with tab2:
     else:
         for ln in lines:
             st.write(f"• {ln}")
-
     st.markdown("### Recommendations / Actions")
     lines = [ln.strip() for ln in (report.get("recommendations") or "").splitlines() if ln.strip()]
     if not lines:
@@ -746,18 +694,15 @@ with tab2:
     else:
         for ln in lines:
             st.write(f"• {ln}")
-
     st.divider()
     st.subheader("Export")
     file_base = f"trane_chiller_report_{h['date'] or 'report'}"
     disabled = bool(errors)
     if disabled:
         st.info("Export buttons are disabled until all validation issues are fixed.")
-
     pdf_bytes = build_pdf_bytes(report)
     docx_bytes = build_docx_bytes(report)
     xlsx_bytes = build_xlsx_bytes(report)
-
     c1, c2, c3 = st.columns(3)
     with c1:
         st.download_button(
