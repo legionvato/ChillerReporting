@@ -19,4 +19,42 @@
     {
       "title": "Electrical",
       "items": [
-        { "id": "elec_panel", "label": "Main disconne_
+        { "id": "elec_panel", "label": "Main disconnect / panel condition OK", "type": "status+notes" },
+        { "id": "elec_wiring", "label": "Wiring/terminals appear tight/clean (no discoloration)", "type": "status+notes" }
+      ]
+    },
+    {
+      "title": "Refrigerant & Oil",
+      "items": [
+        { "id": "ref_oil_level", "label": "Oil level/condition checked", "type": "status+notes" }
+      ]
+    },
+    {
+      "title": "Water Side",
+      "items": [
+        { "id": "water_temps", "label": "Entering/leaving water temperatures recorded", "type": "status+notes" },
+        { "id": "water_flow", "label": "Flow/DP indication normal", "type": "status+notes" }
+      ]
+    },
+    {
+      "title": "Controls & Alarms",
+      "items": [
+        { "id": "ctrl_alarms", "label": "Alarm history reviewed", "type": "status+notes" }
+      ]
+    },
+    {
+      "title": "Cleaning / Housekeeping",
+      "items": [
+        { "id": "clean_general", "label": "Unit/panels reasonably clean and dry", "type": "status+notes" }
+      ]
+    },
+    {
+      "title": "Final Status",
+      "items": [
+        { "id": "final_operation", "label": "Unit returned to normal operation", "type": "status+notes" },
+        { "id": "final_followup", "label": "Follow-up required (describe in notes)", "type": "status+notes" }
+      ]
+    }
+  ]
+}
+
