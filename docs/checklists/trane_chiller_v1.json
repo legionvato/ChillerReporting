@@ -296,7 +296,7 @@ class PDFWriter:
 
     def _item_line(self, label: str, status: str):
         status = (status or "").strip() or "—"
-        # Show status inline (user request): "<item> - OK"
+        # Show status inline next to checklist item
         self._text_wrapped(f"- {label} - {status}", size=10, bold=False, color=colors.black, leading=12, indent=0)
         self.y -= 1 * mm
 
@@ -369,7 +369,7 @@ def build_pdf_bytes(report: dict) -> bytes:
         pdf.y -= row_h * 0.8
     pdf.y -= 4 * mm
 
-    box_h = 24 * mm
+    box_h = 30 * mm
     pdf._ensure_space(box_h + 6 * mm)
     box_y = pdf.y - box_h
     c.saveState()
@@ -378,48 +378,62 @@ def build_pdf_bytes(report: dict) -> bytes:
     c.setLineWidth(1)
     c.roundRect(pdf.x0, box_y, pdf.max_w, box_h, radius=3 * mm, stroke=1, fill=1)
 
+    # Header row
     c.setFillColor(colors.black)
     c.setFont("Helvetica-Bold", 11)
-    c.drawString(pdf.x0 + 3 * mm, box_y + box_h - 6 * mm, "Service Summary")
+    c.drawString(pdf.x0 + 3 * mm, box_y + box_h - 7 * mm, "Service Summary")
     c.setFont("Helvetica-Bold", 10)
-    c.drawRightString(pdf.x1 - 3 * mm, box_y + box_h - 6 * mm, f"Overall: {summary['overall']}")
+    c.drawRightString(pdf.x1 - 3 * mm, box_y + box_h - 7 * mm, f"Overall: {summary['overall']}")
 
+    # Counts row
     counts = summary["counts"]
     c.setFont("Helvetica", 9)
     c.drawString(
         pdf.x0 + 3 * mm,
-        box_y + box_h - 12 * mm,
-        f"OK: {counts['OK']} | Not OK: {counts['Not OK']} | N/A: {counts['N/A']} | Pending: {counts['Pending']}",
+        box_y + box_h - 14 * mm,
+        f"OK: {counts['OK']} | Not OK: {counts['Not OK']} | N/A: {counts['N/A']} | Pending: {counts.get('Pending', 0)}",
     )
 
-    not_ok_items = summary["not_ok_items"][:6]
-    not_ok_text = ", ".join(not_ok_items) if not_ok_items else "None"
-
+    # Not OK items block (readable, wrapped, no overlap)
     c.setFillColor(colors.grey)
     c.setFont("Helvetica-Bold", 9)
-    c.drawString(pdf.x0 + 3 * mm, box_y + 5.5 * mm, "Not OK items:")
-    c.setFillColor(colors.black)
-    c.setFont("Helvetica", 9)
+    label_y = box_y + box_h - 21 * mm
+    c.drawString(pdf.x0 + 3 * mm, label_y, "Not OK items:")
 
-    max_w = pdf.max_w - 26 * mm
-    words = not_ok_text.split()
-    line, lines = [], []
-    while words:
-        line.append(words.pop(0))
-        if words:
-            w = c.stringWidth(" ".join(line + [words[0]]), "Helvetica", 9)
-            if w > max_w:
-                lines.append(" ".join(line))
-                line = []
-    if line:
-        lines.append(" ".join(line))
+    not_ok_items = summary.get("not_ok_items") or []
+    if not not_ok_items:
+        c.setFillColor(colors.black)
+        c.setFont("Helvetica", 9)
+        c.drawString(pdf.x0 + 28 * mm, label_y, "None")
+    else:
+        txt = c.beginText()
+        txt.setTextOrigin(pdf.x0 + 28 * mm, label_y)
+        txt.setFont("Helvetica", 9)
+        txt.setLeading(10)
 
-    yy = box_y + 5.5 * mm
-    for i, ln in enumerate(lines[:2]):
-        c.drawString(pdf.x0 + 26 * mm, yy + (i * 4.2 * mm), ln)
+        max_w = pdf.max_w - 28 * mm - 3 * mm
+
+        def wrap_item(prefix: str, s: str):
+            words = (s or "").split()
+            line = prefix
+            for w in words:
+                test = (line + " " + w).strip()
+                if c.stringWidth(test, "Helvetica", 9) <= max_w:
+                    line = test
+                else:
+                    txt.textLine(line)
+                    line = "  " + w  # continuation indent
+            if line.strip():
+                txt.textLine(line)
+
+        for it in not_ok_items[:6]:
+            wrap_item("•", str(it))
+
+        c.setFillColor(colors.black)
+        c.drawText(txt)
 
     c.restoreState()
-    pdf.y = box_y - 7 * mm
+    pdf.y = box_y - 8 * mm
 
     pdf._text_wrapped("Checklist", size=12, bold=True, leading=14)
     pdf.y -= 2 * mm
