@@ -36,6 +36,45 @@ PDF_PHOTO_COLS = 2
 PDF_PHOTO_MAX_H = 60 * mm
 PDF_PHOTO_GAP = 4 * mm
 
+# Extra spacing under report title bar (fix: text too close to title)
+PDF_TOP_GAP_AFTER_TITLE = 6 * mm
+
+# Fallback checklist (requested "real checklist")
+REAL_CHECKLIST_LINES = [
+    "Check unit for proper operation, excessive noise.",
+    "Check for refrigerant leak, find out oiled spots.",
+    "Run each compressor on the 75 steps for half an hour.",
+    "Check oil level in oil separator sight glass.",
+    "Check all the parameters from chiller’s LCD monitor for each compressor",
+    "Check liquid line sight glass.",
+    "Check superheat on evaporator.",
+    "Check suction superheat",
+    "Check liquid sub-cooling",
+    "Check water flow",
+    "Check fault history",
+    "Check programmable operating set points and safety cutouts. Assure they are correct for the application.",
+    "Disconnect power source and lock out. Check electrical wiring and connections; tighten loose connections",
+    "Check water PH/ glycol strength",
+    "Check contactors, sensors, and mechanical safety limits",
+    "Check all sensors resistance and voltage according chart in manual",
+    "Check the fan overload settings are correct for the type of fan fitted",
+    "Check oil pressure delta P",
+    "Check oil condition on site",
+    "Check the system for superheat and sub cooling",
+    "Inspect dehydrator",
+    "Perform operational test and return to service"
+]
+
+def build_fallback_checklist():
+    items = []
+    for i, txt in enumerate(REAL_CHECKLIST_LINES, start=1):
+        items.append({"id": f"item_{i:02d}", "label": txt})
+    return {
+        "name": "Trane Chiller Maintenance Checklist",
+        "version": "real_v1",
+        "sections": [{"title": "Maintenance Checklist", "items": items}],
+    }
+
 # ────────────────────────────────────────────────
 # Helpers
 # ────────────────────────────────────────────────
@@ -43,14 +82,18 @@ def safe_text(x: str) -> str:
     return (x or "").strip()
 
 def load_checklist(path: str) -> tuple[dict, str]:
+    """
+    Loads checklist JSON if present; otherwise uses the built-in checklist.
+    """
+    fallback = build_fallback_checklist()
     if not os.path.exists(path):
-        return {"name": "Checklist missing", "version": "0", "sections": []}, f"Checklist file not found: {path}"
+        return fallback, "Checklist file not found, using built-in checklist."
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         return data, f"Loaded checklist from: {path}"
     except Exception as e:
-        return {"name": "Checklist read error", "version": "0", "sections": []}, f"Failed to read checklist: {e}"
+        return fallback, f"Failed to read checklist ({e}), using built-in checklist."
 
 def is_removed_item(item: dict) -> bool:
     item_id = (item.get("id") or "").lower()
@@ -103,6 +146,7 @@ def compute_summary(report: dict) -> dict:
             or "returned to normal operation" in ll
             or "final status" in ll
             or "unit returned" in ll
+            or "return to service" in ll
         ):
             final_status_not_ok = True
             break
@@ -158,12 +202,7 @@ def add_photos_dedup(item_id: str, uploaded_files) -> None:
         known.add(h)
 
 # ────────────────────────────────────────────────
-# PDF Export (Clean visuals)
-# Requirements implemented:
-# 1) Remove "Report Details" heading (keep fields only)
-# 2) Ensure "Overall: ATTENTION" uses normal consistent Helvetica-Bold
-# 3) Remove any "Photos: <item>" labels
-# 4) Remove "Photo 1/2" captions and any grey border lines
+# PDF Export
 # ────────────────────────────────────────────────
 class PDFWriter:
     def __init__(self, c: canvas.Canvas, title: str):
@@ -181,6 +220,7 @@ class PDFWriter:
         self.max_w = self.x1 - self.x0
         self.y = self.content_top
         self._draw_header()
+        self.y -= PDF_TOP_GAP_AFTER_TITLE
 
     def _draw_header(self):
         c = self.c
@@ -207,17 +247,11 @@ class PDFWriter:
         self._draw_footer()
         self.c.showPage()
         self._draw_header()
+        self.y -= PDF_TOP_GAP_AFTER_TITLE
 
     def _ensure_space(self, needed_h: float):
         if self.y - needed_h < self.content_bottom:
             self._new_page()
-
-    def _text(self, txt: str, size=10, bold=False, color=colors.black, leading=12):
-        self._ensure_space(leading)
-        self.c.setFont("Helvetica-Bold" if bold else "Helvetica", size)
-        self.c.setFillColor(color)
-        self.c.drawString(self.x0, self.y, txt)
-        self.y -= leading * 0.9
 
     def _text_wrapped(self, txt: str, size=10, bold=False, color=colors.black, leading=12, indent=0):
         txt = txt or ""
@@ -257,52 +291,13 @@ class PDFWriter:
         self.c.drawString(self.x0 + 3 * mm, y + 2.5 * mm, title)
         self.y = y - 3 * mm
 
-    def _item_line(self, label: str, status: str):
-        """
-        Status is appended as plain text in brackets.
-        This avoids alignment problems from right-side badges.
-        """
-        c = self.c
-        c.setFont("Helvetica", 10)
-        leading = 12
-
-        txt = f"- {label} [{status or '—'}]"
-        max_w = self.max_w
-        words = txt.split()
-        lines: list[str] = []
-        line: list[str] = []
-
-        while words:
-            line.append(words.pop(0))
-            if words:
-                w = c.stringWidth(" ".join(line + [words[0]]), "Helvetica", 10)
-                if w > max_w:
-                    lines.append(" ".join(line))
-                    line = []
-        if line:
-            lines.append(" ".join(line))
-
-        total_h = leading * len(lines) + 2 * mm
-        self._ensure_space(total_h)
-
-        for ln in lines:
-            c.setFillColor(colors.black)
-            c.setFont("Helvetica", 10)
-            c.drawString(self.x0, self.y, ln)
-            self.y -= leading * 0.85
-
+    def _item_line(self, label: str):
+        self._text_wrapped(f"- {label}", size=10, bold=False, color=colors.black, leading=12, indent=0)
         self.y -= 1 * mm
 
     def _photo_grid(self, photos: list[bytes]):
-        """
-        Clean grid:
-        - No "Photos:" label
-        - No "Photo 1/2" captions
-        - No borders/grey rectangles
-        """
         if not photos:
             return
-
         cols = PDF_PHOTO_COLS
         gap = PDF_PHOTO_GAP
         max_h = PDF_PHOTO_MAX_H
@@ -321,20 +316,17 @@ class PDFWriter:
             row = scaled[i:i + cols]
             row_h = max(th for (_, _, th) in row)
             needed = row_h + 2 * mm
-
             if self.y - needed < self.content_bottom:
                 self._new_page()
 
             top_y = self.y
             x = self.x0
-
             for (b, tw, th) in row:
                 y = top_y - th
                 img = Image.open(io.BytesIO(b)).convert("RGB")
                 img_buf = io.BytesIO()
                 img.save(img_buf, format="JPEG", quality=85)
                 img_buf.seek(0)
-
                 self.c.drawImage(ImageReader(img_buf), x, y, width=tw, height=th, preserveAspectRatio=True, mask="auto")
                 x += col_w + gap
 
@@ -352,8 +344,6 @@ def build_pdf_bytes(report: dict) -> bytes:
     header = report["header"]
     summary = compute_summary(report)
 
-    # 1) NO "Report Details" heading — just print fields
-    pdf._ensure_space(18 * mm)
     rows = [
         ("Date", header.get("date", "")),
         ("Project", header.get("project", "")),
@@ -361,7 +351,6 @@ def build_pdf_bytes(report: dict) -> bytes:
         ("Model", header.get("model", "")),
         ("Technician", header.get("technician", "")),
     ]
-
     label_w = 28 * mm
     row_h = 6.5 * mm
     for k, v in rows:
@@ -375,7 +364,6 @@ def build_pdf_bytes(report: dict) -> bytes:
         pdf.y -= row_h * 0.8
     pdf.y -= 4 * mm
 
-    # Service Summary box
     box_h = 24 * mm
     pdf._ensure_space(box_h + 6 * mm)
     box_y = pdf.y - box_h
@@ -388,8 +376,6 @@ def build_pdf_bytes(report: dict) -> bytes:
     c.setFillColor(colors.black)
     c.setFont("Helvetica-Bold", 11)
     c.drawString(pdf.x0 + 3 * mm, box_y + box_h - 6 * mm, "Service Summary")
-
-    # 2) Ensure consistent font for "Overall: ATTENTION"
     c.setFont("Helvetica-Bold", 10)
     c.drawRightString(pdf.x1 - 3 * mm, box_y + box_h - 6 * mm, f"Overall: {summary['overall']}")
 
@@ -430,7 +416,7 @@ def build_pdf_bytes(report: dict) -> bytes:
     c.restoreState()
     pdf.y = box_y - 7 * mm
 
-    pdf._text("Checklist", size=12, bold=True)
+    pdf._text_wrapped("Checklist", size=12, bold=True, leading=14)
     pdf.y -= 2 * mm
 
     for sec in report["sections"]:
@@ -438,11 +424,15 @@ def build_pdf_bytes(report: dict) -> bytes:
         for item in sec["items"]:
             item_id = item["id"]
             label = item["label"]
-            status = report["results"].get(item_id, {}).get("status", "") or "—"
+
+            status = report["results"].get(item_id, {}).get("status", "") or ""
+            if status == "N/A":
+                continue
+
             notes = safe_text(report["results"].get(item_id, {}).get("notes", ""))
             photos = (report.get("photos_by_item") or {}).get(item_id, [])
 
-            pdf._item_line(label, status)
+            pdf._item_line(label)
 
             if notes:
                 pdf._text_wrapped(
@@ -453,7 +443,6 @@ def build_pdf_bytes(report: dict) -> bytes:
                     leading=11,
                 )
 
-            # 3 & 4) Clean photos: no labels, no captions
             if photos:
                 pdf._photo_grid(photos)
 
@@ -463,7 +452,7 @@ def build_pdf_bytes(report: dict) -> bytes:
         pdf._section_bar(title)
         lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
         if not lines:
-            pdf._text("• None", size=10)
+            pdf._text_wrapped("• None", size=10, leading=12)
             return
         for ln in lines:
             pdf._text_wrapped(f"• {ln}", size=10, leading=12)
@@ -475,7 +464,7 @@ def build_pdf_bytes(report: dict) -> bytes:
     return buf.getvalue()
 
 # ────────────────────────────────────────────────
-# DOCX Export
+# DOCX Export: hides N/A items and prints no status
 # ────────────────────────────────────────────────
 def _set_cell_shading(cell, fill_hex: str):
     tc = cell._tc
@@ -504,7 +493,6 @@ def build_docx_bytes(report: dict) -> bytes:
     title.runs[0].font.size = Pt(18)
     doc.add_paragraph()
 
-    # Keep DOCX "Report Details" section (PDF cleanup request only)
     h = doc.add_paragraph("Report Details")
     h.runs[0].bold = True
     h.runs[0].font.size = Pt(12)
@@ -558,12 +546,14 @@ def build_docx_bytes(report: dict) -> bytes:
         for item in sec["items"]:
             item_id = item["id"]
             label = item["label"]
-            status = report["results"].get(item_id, {}).get("status", "") or "—"
+            status = report["results"].get(item_id, {}).get("status", "") or ""
+            if status == "N/A":
+                continue
+
             notes = safe_text(report["results"].get(item_id, {}).get("notes", ""))
             photos = (report.get("photos_by_item") or {}).get(item_id, [])
 
-            p = doc.add_paragraph()
-            p.add_run(f"- {label} [{status}]")
+            doc.add_paragraph(f"- {label}")
 
             if notes:
                 pn = doc.add_paragraph(f"Notes: {notes}")
@@ -601,7 +591,7 @@ def build_docx_bytes(report: dict) -> bytes:
     return out.getvalue()
 
 # ────────────────────────────────────────────────
-# XLSX Export
+# XLSX Export (hide N/A items)
 # ────────────────────────────────────────────────
 def build_xlsx_bytes(report: dict) -> bytes:
     wb = Workbook()
@@ -636,6 +626,8 @@ def build_xlsx_bytes(report: dict) -> bytes:
             item_id = item["id"]
             label = item["label"]
             status = report["results"].get(item_id, {}).get("status", "")
+            if status == "N/A":
+                continue
             notes = report["results"].get(item_id, {}).get("notes", "")
             ws.append([sec["title"], label, status, notes])
 
@@ -651,6 +643,7 @@ def build_xlsx_bytes(report: dict) -> bytes:
 
 # ────────────────────────────────────────────────
 # Streamlit UI
+# - N/A: greys label, disables notes + photo upload, hides item in exported report
 # ────────────────────────────────────────────────
 st.title("Trane Chiller Maintenance Report")
 
@@ -692,14 +685,20 @@ with tab1:
                 if item_id not in st.session_state.photos_by_item:
                     st.session_state.photos_by_item[item_id] = []
 
+                current_status = st.session_state.results[item_id]["status"]
+                is_na = (current_status == "N/A")
+
+                label_color = "#999999" if is_na else "#111111"
+                st.markdown(f"<div style='color:{label_color}; font-weight:600;'>{label}</div>", unsafe_allow_html=True)
+
                 colA, colB = st.columns([2, 3])
                 with colA:
-                    current_status = st.session_state.results[item_id]["status"]
                     status = st.selectbox(
-                        label,
+                        "Status",
                         options=STATUS_OPTIONS,
                         index=STATUS_OPTIONS.index(current_status) if current_status in STATUS_OPTIONS else 0,
                         key=f"status_{item_id}",
+                        label_visibility="collapsed",
                     )
 
                 with colB:
@@ -709,21 +708,28 @@ with tab1:
                         value=st.session_state.results[item_id]["notes"],
                         key=f"notes_{item_id}",
                         placeholder="Describe issue (required if Not OK)" if status == "Not OK" else "Optional notes",
+                        disabled=(status == "N/A"),
                     )
                     if status == "Not OK" and not safe_text(notes):
                         st.warning("Notes are required when status is Not OK.", icon="⚠️")
+                    if status == "N/A":
+                        st.caption("Marked N/A — this item will be hidden in the exported report.")
 
                 st.session_state.results[item_id]["status"] = status
                 st.session_state.results[item_id]["notes"] = notes
 
                 with st.expander("Photos for this item", expanded=False):
+                    if status == "N/A":
+                        st.caption("Photo upload disabled for N/A items.")
+
                     uploaded_files = st.file_uploader(
                         "Upload photos (jpg/png)",
                         type=["jpg", "jpeg", "png"],
                         accept_multiple_files=True,
                         key=f"uploader_{item_id}",
+                        disabled=(status == "N/A"),
                     )
-                    if uploaded_files:
+                    if uploaded_files and status != "N/A":
                         add_photos_dedup(item_id, uploaded_files)
 
                     current_photos = st.session_state.photos_by_item[item_id]
@@ -733,7 +739,7 @@ with tab1:
                             with cols[idx % 3]:
                                 st.image(img_bytes, use_container_width=True)
 
-                    if current_photos and st.button("Clear all photos for this item", key=f"clear_{item_id}"):
+                    if current_photos and st.button("Clear all photos for this item", key=f"clear_{item_id}", disabled=(status == "N/A")):
                         st.session_state.photos_by_item[item_id] = []
                         hk = f"photo_hashes_{item_id}"
                         if hk in st.session_state:
@@ -803,6 +809,8 @@ with tab2:
         for item in sec["items"]:
             item_id = item["id"]
             status = report["results"].get(item_id, {}).get("status", "") or "—"
+            if status == "N/A":
+                continue
             notes = safe_text(report["results"].get(item_id, {}).get("notes", ""))
             st.write(f"- {item['label']} — **{status}**")
             if notes:
