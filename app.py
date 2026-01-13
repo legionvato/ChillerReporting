@@ -27,53 +27,13 @@ st.set_page_config(page_title="Trane Chiller Maintenance Report", layout="wide")
 
 CHECKLIST_PATH = os.path.join("docs", "checklists", "trane_chiller_v1.json")
 FOOTER_TEXT = "Treimax Georgia Maintenance / Service Reporting Tool"
-
 STATUS_OPTIONS = ["", "OK", "Not OK", "N/A"]
-DEFAULT_STATUS = ""
 
-# PDF photo layout (2-column grid, clean)
+# PDF tuning
 PDF_PHOTO_COLS = 2
 PDF_PHOTO_MAX_H = 60 * mm
 PDF_PHOTO_GAP = 4 * mm
-
-# Extra spacing under report title bar (fix: text too close to title)
 PDF_TOP_GAP_AFTER_TITLE = 6 * mm
-
-# Fallback checklist (requested "real checklist")
-REAL_CHECKLIST_LINES = [
-    "Check unit for proper operation, excessive noise.",
-    "Check for refrigerant leak, find out oiled spots.",
-    "Run each compressor on the 75 steps for half an hour.",
-    "Check oil level in oil separator sight glass.",
-    "Check all the parameters from chiller’s LCD monitor for each compressor",
-    "Check liquid line sight glass.",
-    "Check superheat on evaporator.",
-    "Check suction superheat",
-    "Check liquid sub-cooling",
-    "Check water flow",
-    "Check fault history",
-    "Check programmable operating set points and safety cutouts. Assure they are correct for the application.",
-    "Disconnect power source and lock out. Check electrical wiring and connections; tighten loose connections",
-    "Check water PH/ glycol strength",
-    "Check contactors, sensors, and mechanical safety limits",
-    "Check all sensors resistance and voltage according chart in manual",
-    "Check the fan overload settings are correct for the type of fan fitted",
-    "Check oil pressure delta P",
-    "Check oil condition on site",
-    "Check the system for superheat and sub cooling",
-    "Inspect dehydrator",
-    "Perform operational test and return to service"
-]
-
-def build_fallback_checklist():
-    items = []
-    for i, txt in enumerate(REAL_CHECKLIST_LINES, start=1):
-        items.append({"id": f"item_{i:02d}", "label": txt})
-    return {
-        "name": "Trane Chiller Maintenance Checklist",
-        "version": "real_v1",
-        "sections": [{"title": "Maintenance Checklist", "items": items}],
-    }
 
 # ────────────────────────────────────────────────
 # Helpers
@@ -82,44 +42,41 @@ def safe_text(x: str) -> str:
     return (x or "").strip()
 
 def load_checklist(path: str) -> tuple[dict, str]:
-    """
-    Loads checklist JSON if present; otherwise uses the built-in checklist.
-    """
-    fallback = build_fallback_checklist()
     if not os.path.exists(path):
-        return fallback, "Checklist file not found, using built-in checklist."
+        return {"name": "Checklist missing", "version": "0", "sections": []}, f"Checklist file not found: {path}"
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         return data, f"Loaded checklist from: {path}"
     except Exception as e:
-        return fallback, f"Failed to read checklist ({e}), using built-in checklist."
-
-def is_removed_item(item: dict) -> bool:
-    item_id = (item.get("id") or "").lower()
-    label = (item.get("label") or "").lower()
-    if item_id == "safety_loto":
-        return True
-    if "loto" in label or "ppe" in label:
-        return True
-    return False
+        return {"name": "Checklist read error", "version": "0", "sections": []}, f"Failed to read checklist: {e}"
 
 def normalize_sections(checklist: dict) -> list[dict]:
     sections = checklist.get("sections") or []
-    out: list[dict] = []
+    out = []
     for s in sections:
         title = s.get("title") or s.get("name") or "Section"
         items = s.get("items") or []
-        items = [it for it in items if not is_removed_item(it)]
         out.append({"title": title, "items": items})
     return out
 
+def checklist_signature(sections: list[dict]) -> str:
+    """
+    Signature of checklist IDs so we can reset session state automatically when checklist changes.
+    """
+    ids = []
+    for sec in sections:
+        for it in sec.get("items") or []:
+            ids.append(str(it.get("id", "")))
+    raw = "|".join(ids).encode("utf-8")
+    return hashlib.sha1(raw).hexdigest()
+
 def compute_summary(report: dict) -> dict:
     counts = {"OK": 0, "Not OK": 0, "N/A": 0, "Pending": 0}
-    not_ok_items: list[str] = []
+    not_ok_items = []
     final_status_not_ok = False
 
-    id_to_label: dict[str, str] = {}
+    id_to_label = {}
     for sec in report["sections"]:
         for it in sec["items"]:
             id_to_label[it["id"]] = it["label"]
@@ -139,15 +96,8 @@ def compute_summary(report: dict) -> dict:
 
     for item_id, label in id_to_label.items():
         status = (results.get(item_id) or {}).get("status", "")
-        lid = (item_id or "").lower()
         ll = (label or "").lower()
-        if status == "Not OK" and (
-            "final" in lid
-            or "returned to normal operation" in ll
-            or "final status" in ll
-            or "unit returned" in ll
-            or "return to service" in ll
-        ):
+        if status == "Not OK" and ("return to service" in ll or "final" in ll):
             final_status_not_ok = True
             break
 
@@ -162,8 +112,8 @@ def compute_summary(report: dict) -> dict:
     return {"counts": counts, "not_ok_items": not_ok_items, "overall": overall}
 
 def validate_report(report: dict) -> list[str]:
-    errors: list[str] = []
-    id_to_label: dict[str, str] = {}
+    errors = []
+    id_to_label = {}
     for sec in report["sections"]:
         for it in sec["items"]:
             id_to_label[it["id"]] = it["label"]
@@ -200,6 +150,15 @@ def add_photos_dedup(item_id: str, uploaded_files) -> None:
             continue
         st.session_state.photos_by_item[item_id].append(b)
         known.add(h)
+
+def reset_report_state():
+    st.session_state.results = {}
+    st.session_state.photos_by_item = {}
+    st.session_state.current_report = None
+    # also clear per-item uploader keys/hashes if they exist
+    for k in list(st.session_state.keys()):
+        if k.startswith("uploader_") or k.startswith("notes_") or k.startswith("status_") or k.startswith("photo_hashes_"):
+            del st.session_state[k]
 
 # ────────────────────────────────────────────────
 # PDF Export
@@ -265,7 +224,7 @@ class PDFWriter:
             self.y -= leading * 0.9
             return
 
-        line: list[str] = []
+        line = []
         while words:
             line.append(words.pop(0))
             if words:
@@ -291,8 +250,9 @@ class PDFWriter:
         self.c.drawString(self.x0 + 3 * mm, y + 2.5 * mm, title)
         self.y = y - 3 * mm
 
-    def _item_line(self, label: str):
-        self._text_wrapped(f"- {label}", size=10, bold=False, color=colors.black, leading=12, indent=0)
+    def _item_line(self, label: str, status: str):
+        status = (status or "").strip() or "—"
+        self._text_wrapped(f"- {label} - {status}", size=10, bold=False, color=colors.black, leading=12, indent=0)
         self.y -= 1 * mm
 
     def _photo_grid(self, photos: list[bytes]):
@@ -344,6 +304,7 @@ def build_pdf_bytes(report: dict) -> bytes:
     header = report["header"]
     summary = compute_summary(report)
 
+    # Details (no "Report Details" heading)
     rows = [
         ("Date", header.get("date", "")),
         ("Project", header.get("project", "")),
@@ -364,7 +325,8 @@ def build_pdf_bytes(report: dict) -> bytes:
         pdf.y -= row_h * 0.8
     pdf.y -= 4 * mm
 
-    box_h = 24 * mm
+    # Service Summary (readable Not OK list)
+    box_h = 30 * mm
     pdf._ensure_space(box_h + 6 * mm)
     box_y = pdf.y - box_h
     c.saveState()
@@ -375,46 +337,56 @@ def build_pdf_bytes(report: dict) -> bytes:
 
     c.setFillColor(colors.black)
     c.setFont("Helvetica-Bold", 11)
-    c.drawString(pdf.x0 + 3 * mm, box_y + box_h - 6 * mm, "Service Summary")
+    c.drawString(pdf.x0 + 3 * mm, box_y + box_h - 7 * mm, "Service Summary")
     c.setFont("Helvetica-Bold", 10)
-    c.drawRightString(pdf.x1 - 3 * mm, box_y + box_h - 6 * mm, f"Overall: {summary['overall']}")
+    c.drawRightString(pdf.x1 - 3 * mm, box_y + box_h - 7 * mm, f"Overall: {summary['overall']}")
 
     counts = summary["counts"]
     c.setFont("Helvetica", 9)
     c.drawString(
         pdf.x0 + 3 * mm,
-        box_y + box_h - 12 * mm,
+        box_y + box_h - 14 * mm,
         f"OK: {counts['OK']} | Not OK: {counts['Not OK']} | N/A: {counts['N/A']} | Pending: {counts['Pending']}",
     )
 
-    not_ok_items = summary["not_ok_items"][:6]
-    not_ok_text = ", ".join(not_ok_items) if not_ok_items else "None"
-
     c.setFillColor(colors.grey)
     c.setFont("Helvetica-Bold", 9)
-    c.drawString(pdf.x0 + 3 * mm, box_y + 5.5 * mm, "Not OK items:")
-    c.setFillColor(colors.black)
-    c.setFont("Helvetica", 9)
+    label_y = box_y + box_h - 21 * mm
+    c.drawString(pdf.x0 + 3 * mm, label_y, "Not OK items:")
 
-    max_w = pdf.max_w - 26 * mm
-    words = not_ok_text.split()
-    line, lines = [], []
-    while words:
-        line.append(words.pop(0))
-        if words:
-            w = c.stringWidth(" ".join(line + [words[0]]), "Helvetica", 9)
-            if w > max_w:
-                lines.append(" ".join(line))
-                line = []
-    if line:
-        lines.append(" ".join(line))
+    not_ok_items = summary.get("not_ok_items") or []
+    if not not_ok_items:
+        c.setFillColor(colors.black)
+        c.setFont("Helvetica", 9)
+        c.drawString(pdf.x0 + 28 * mm, label_y, "None")
+    else:
+        txt = c.beginText()
+        txt.setTextOrigin(pdf.x0 + 28 * mm, label_y)
+        txt.setFont("Helvetica", 9)
+        txt.setLeading(10)
+        max_w = pdf.max_w - 28 * mm - 3 * mm
 
-    yy = box_y + 5.5 * mm
-    for i, ln in enumerate(lines[:2]):
-        c.drawString(pdf.x0 + 26 * mm, yy + (i * 4.2 * mm), ln)
+        def wrap_item(prefix: str, s: str):
+            words = (s or "").split()
+            line = prefix
+            for w in words:
+                test = (line + " " + w).strip()
+                if c.stringWidth(test, "Helvetica", 9) <= max_w:
+                    line = test
+                else:
+                    txt.textLine(line)
+                    line = "  " + w
+            if line.strip():
+                txt.textLine(line)
+
+        for it in not_ok_items[:6]:
+            wrap_item("•", str(it))
+
+        c.setFillColor(colors.black)
+        c.drawText(txt)
 
     c.restoreState()
-    pdf.y = box_y - 7 * mm
+    pdf.y = box_y - 8 * mm
 
     pdf._text_wrapped("Checklist", size=12, bold=True, leading=14)
     pdf.y -= 2 * mm
@@ -424,7 +396,6 @@ def build_pdf_bytes(report: dict) -> bytes:
         for item in sec["items"]:
             item_id = item["id"]
             label = item["label"]
-
             status = report["results"].get(item_id, {}).get("status", "") or ""
             if status == "N/A":
                 continue
@@ -432,15 +403,15 @@ def build_pdf_bytes(report: dict) -> bytes:
             notes = safe_text(report["results"].get(item_id, {}).get("notes", ""))
             photos = (report.get("photos_by_item") or {}).get(item_id, [])
 
-            pdf._item_line(label)
+            pdf._item_line(label, status)
 
             if notes:
                 pdf._text_wrapped(
                     f"Notes: {notes}",
-                    size=9,
+                    size=10,  # same size as checklist lines
                     color=colors.HexColor("#333333"),
                     indent=8 * mm,
-                    leading=11,
+                    leading=12,
                 )
 
             if photos:
@@ -464,7 +435,7 @@ def build_pdf_bytes(report: dict) -> bytes:
     return buf.getvalue()
 
 # ────────────────────────────────────────────────
-# DOCX Export: hides N/A items and prints no status
+# DOCX Export
 # ────────────────────────────────────────────────
 def _set_cell_shading(cell, fill_hex: str):
     tc = cell._tc
@@ -493,10 +464,6 @@ def build_docx_bytes(report: dict) -> bytes:
     title.runs[0].font.size = Pt(18)
     doc.add_paragraph()
 
-    h = doc.add_paragraph("Report Details")
-    h.runs[0].bold = True
-    h.runs[0].font.size = Pt(12)
-
     details = [
         ("Date", header.get("date", "") or "—"),
         ("Project", header.get("project", "") or "—"),
@@ -519,7 +486,7 @@ def build_docx_bytes(report: dict) -> bytes:
 
     counts = summary["counts"]
     not_ok_list = summary["not_ok_items"] or ["None"]
-    stbl = doc.add_table(rows=4, cols=2)
+    stbl = doc.add_table(rows=3, cols=2)
     stbl.style = "Table Grid"
     stbl.cell(0, 0).text = "Overall"
     stbl.cell(0, 1).text = summary["overall"]
@@ -527,10 +494,7 @@ def build_docx_bytes(report: dict) -> bytes:
     stbl.cell(1, 1).text = f"OK: {counts['OK']} | Not OK: {counts['Not OK']} | N/A: {counts['N/A']} | Pending: {counts['Pending']}"
     stbl.cell(2, 0).text = "Not OK items"
     stbl.cell(2, 1).text = ", ".join(not_ok_list)
-    stbl.cell(3, 0).text = "Generated by"
-    stbl.cell(3, 1).text = FOOTER_TEXT
-
-    for r in range(4):
+    for r in range(3):
         stbl.cell(r, 0).paragraphs[0].runs[0].bold = True
         _set_cell_shading(stbl.cell(r, 0), "F7F7F7")
 
@@ -549,18 +513,12 @@ def build_docx_bytes(report: dict) -> bytes:
             status = report["results"].get(item_id, {}).get("status", "") or ""
             if status == "N/A":
                 continue
-
             notes = safe_text(report["results"].get(item_id, {}).get("notes", ""))
             photos = (report.get("photos_by_item") or {}).get(item_id, [])
-
-            doc.add_paragraph(f"- {label}")
-
+            doc.add_paragraph(f"- {label} - {status}")
             if notes:
                 pn = doc.add_paragraph(f"Notes: {notes}")
                 pn.paragraph_format.left_indent = Inches(0.25)
-                if pn.runs:
-                    pn.runs[0].font.size = Pt(10)
-
             if photos:
                 for b in photos:
                     img = Image.open(io.BytesIO(b)).convert("RGB")
@@ -591,13 +549,12 @@ def build_docx_bytes(report: dict) -> bytes:
     return out.getvalue()
 
 # ────────────────────────────────────────────────
-# XLSX Export (hide N/A items)
+# XLSX Export
 # ────────────────────────────────────────────────
 def build_xlsx_bytes(report: dict) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Report"
-
     header = report["header"]
     sections = report["sections"]
 
@@ -613,7 +570,6 @@ def build_xlsx_bytes(report: dict) -> bytes:
     summary = compute_summary(report)
     ws.append(["Service Summary"])
     ws.append(["Overall", summary["overall"]])
-
     c = summary["counts"]
     ws.append(["Counts", f"OK: {c['OK']} | Not OK: {c['Not OK']} | N/A: {c['N/A']} | Pending: {c['Pending']}"])
     ws.append(["Not OK items", ", ".join(summary["not_ok_items"]) or "None"])
@@ -636,19 +592,33 @@ def build_xlsx_bytes(report: dict) -> bytes:
     ws.append(["Recommendations / Actions", (report.get("recommendations") or "").strip() or "None"])
     ws.append([])
     ws.append([FOOTER_TEXT])
-
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue()
 
 # ────────────────────────────────────────────────
-# Streamlit UI
-# - N/A: greys label, disables notes + photo upload, hides item in exported report
+# UI
 # ────────────────────────────────────────────────
 st.title("Trane Chiller Maintenance Report")
 
+with st.sidebar:
+    st.header("Controls")
+    if st.button("Reset report"):
+        reset_report_state()
+        st.rerun()
+
 checklist_raw, checklist_msg = load_checklist(CHECKLIST_PATH)
 sections = normalize_sections(checklist_raw)
+
+# Auto-reset state if checklist changed (prevents ID mismatch causing missing OK/Not OK in report)
+sig = checklist_signature(sections)
+if "checklist_sig" not in st.session_state:
+    st.session_state.checklist_sig = sig
+elif st.session_state.checklist_sig != sig:
+    reset_report_state()
+    st.session_state.checklist_sig = sig
+    st.warning("Checklist changed — report state was reset to match new checklist IDs.")
+
 st.caption(checklist_msg)
 
 tab1, tab2 = st.tabs(["Create report", "Preview & export"])
@@ -681,7 +651,7 @@ with tab1:
                 label = item["label"]
 
                 if item_id not in st.session_state.results:
-                    st.session_state.results[item_id] = {"status": DEFAULT_STATUS, "notes": ""}
+                    st.session_state.results[item_id] = {"status": "", "notes": ""}
                 if item_id not in st.session_state.photos_by_item:
                     st.session_state.photos_by_item[item_id] = []
 
@@ -700,7 +670,6 @@ with tab1:
                         key=f"status_{item_id}",
                         label_visibility="collapsed",
                     )
-
                 with colB:
                     notes_label = "Notes (required for Not OK)" if status == "Not OK" else "Notes"
                     notes = st.text_input(
@@ -840,7 +809,6 @@ with tab2:
 
     st.divider()
     st.subheader("Export")
-
     file_base = f"trane_chiller_report_{h['date'] or 'report'}"
     disabled = bool(errors)
 
@@ -853,26 +821,8 @@ with tab2:
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.download_button(
-            "Download PDF",
-            data=pdf_bytes,
-            file_name=f"{file_base}.pdf",
-            mime="application/pdf",
-            disabled=disabled,
-        )
+        st.download_button("Download PDF", data=pdf_bytes, file_name=f"{file_base}.pdf", mime="application/pdf", disabled=disabled)
     with c2:
-        st.download_button(
-            "Download Word (DOCX)",
-            data=docx_bytes,
-            file_name=f"{file_base}.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            disabled=disabled,
-        )
+        st.download_button("Download Word (DOCX)", data=docx_bytes, file_name=f"{file_base}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", disabled=disabled)
     with c3:
-        st.download_button(
-            "Download Excel",
-            data=xlsx_bytes,
-            file_name=f"{file_base}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            disabled=disabled,
-        )
+        st.download_button("Download Excel", data=xlsx_bytes, file_name=f"{file_base}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", disabled=disabled)
